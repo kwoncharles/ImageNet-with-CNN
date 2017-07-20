@@ -1,0 +1,149 @@
+# Reference to ' https://github.com/hunkim/DeepLearningZeroToAll ' MNIST CNN
+
+import tensorflow as tf
+#import matplotlib.pyplot as plt
+import numpy as np
+import pickle
+
+def unpickle(file):
+    with open(file, 'rb') as fo:
+        dict = pickle.load(fo)
+    return dict
+
+Imgnet = unpickle("./Imgnet")
+
+# typecasting Imgnet data as float32
+
+Imgnet['data'] = Imgnet['data'].astype(np.float32) # Cuz it's a numpy array
+# Imgnet['labels']=[int(i) for i in Imgnet['labels']] # Cuz it's a list
+
+batch_size = 100
+training_epochs = 15
+learning_rate = 0.001
+nb_classes = 1000
+
+# dropout (keep_prob) rate  0.7~0.5 on training, but should be 1 for testing
+keep_prob = tf.placeholder(tf.float32)
+
+X = tf.placeholder(tf.float32, shape = [None, 3072])
+Y = tf.placeholder(tf.int32, shape = [None,1]) #one_hot이라 int
+X_img = tf.reshape(X, [-1, 32, 32, 3]) # RGB 32x32
+
+Y_one_hot = tf.one_hot(Y, nb_classes)  # one hot
+print("one_hot", Y_one_hot)
+Y_one_hot = tf.reshape(Y_one_hot, [-1, nb_classes])
+print("reshape", Y_one_hot)
+
+'''
+# convert output data to ONE_HOT // 수동 one_hot, Does it work?
+
+row = len(Imgnet['labels'])
+labels = np.zeros((row, 1000))
+
+for i in range(row):
+    j = int(Imgnet['labels'][i]- 1.)
+    labels[i][j] = 1.
+'''
+
+labels = np.asarray(Imgnet['labels'], np.float32)
+labels = np.reshape(labels,[-1,1])
+
+# divide data into test sets and train sets
+
+X_train = Imgnet['data'][:-10000]
+X_test = Imgnet['data'][-10000:]
+
+Y_train = labels[:-10000]
+Y_test = labels[-10000:]
+
+num_train = len(Y_train)
+num_test = len(Y_test)
+
+
+# L1 ImgIn shape=(?, 32, 32, 3) 32x32, RGB
+W1 = tf.Variable(tf.random_normal([3, 3, 3, 32], stddev=0.01))
+# 3 x 3, 3-filter, 32ea
+#    Conv     -> (?, 32, 32, 32)
+#    Pool     -> (?, 16, 16, 32)
+L1 = tf.nn.conv2d(X_img, W1, strides=[1, 1, 1, 1], padding='SAME')
+L1 = tf.nn.relu(L1) # relu는 size 변경 x  
+L1 = tf.nn.max_pool(L1, ksize=[1, 2, 2, 1],
+                    strides=[1, 2, 2, 1], padding='SAME')
+L1 = tf.nn.dropout(L1, keep_prob=keep_prob)
+
+# L2 ImgIn shape=(?, 16, 16, 32)
+W2 = tf.Variable(tf.random_normal([3, 3, 32, 64], stddev=0.01))
+#    Conv      ->(?, 16, 16, 64)
+#    Pool      ->(?, 8, 8, 64)
+L2 = tf.nn.conv2d(L1, W2, strides=[1, 1, 1, 1], padding='SAME')
+L2 = tf.nn.relu(L2)
+L2 = tf.nn.max_pool(L2, ksize=[1, 2, 2, 1],
+                    strides=[1, 2, 2, 1], padding='SAME')
+L2 = tf.nn.dropout(L2, keep_prob=keep_prob)
+
+# L3 ImgIn shape=(?, 8, 8, 64)
+W3 = tf.Variable(tf.random_normal([3, 3, 64, 128], stddev=0.01))
+#    Conv      ->(?, 8, 8, 128)
+#    Pool      ->(?, 4, 4, 128)
+#    Reshape   ->(?, 4 * 4 * 128) # Flatten them for FC
+L3 = tf.nn.conv2d(L2, W3, strides=[1, 1, 1, 1], padding='SAME')
+L3 = tf.nn.relu(L3)
+L3 = tf.nn.max_pool(L3, ksize=[1, 2, 2, 1], strides=[
+                    1, 2, 2, 1], padding='SAME')
+L3 = tf.nn.dropout(L3, keep_prob=keep_prob)
+L3_flat = tf.reshape(L3, [-1, 128 * 4 * 4])
+
+# L4 FC 4x4x128 inputs -> 625 outputs
+W4 = tf.get_variable("W4", shape=[128 * 4 * 4, 625],
+                     initializer=tf.contrib.layers.xavier_initializer())
+b4 = tf.Variable(tf.random_normal([625]))
+L4 = tf.nn.relu(tf.matmul(L3_flat, W4) + b4)
+L4 = tf.nn.dropout(L4, keep_prob=keep_prob)
+
+# L5 Final FC 625 inputs -> 1000 outputs
+W5 = tf.get_variable("W7", shape=[625, nb_classes],
+                     initializer=tf.contrib.layers.xavier_initializer())
+b5 = tf.Variable(tf.random_normal([nb_classes]))
+logits = tf.matmul(L4, W5) + b5
+hypothesis = tf.nn.softmax(logits)
+
+
+# define cost/loss & optimizer
+cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
+    logits=logits, labels=Y_one_hot))
+optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(cost)
+
+# initialize
+sess = tf.Session()
+sess.run(tf.global_variables_initializer())
+
+# train my model
+print('Learning started. It takes sometime.')
+for epoch in range(training_epochs):
+    avg_cost = 0
+    total_batch = int(num_train / batch_size)
+    
+    for i in range(total_batch):
+        # assign batch index
+        batch_x, batch_y = X_train[i*batch_size:(i+1)*batch_size],\
+                           Y_train[i*batch_size:(i+1)*batch_size]
+        c, _ = sess.run([cost, optimizer], 
+                       feed_dict = {X:batch_x, Y:batch_y, keep_prob:0.7})
+        avg_cost += c / total_batch
+    
+    print('Epoch', '%04d' % (epoch+1), 'cost = ', '{:.9f}'.format(avg_cost))
+
+# Test model and check accuracy
+
+# if you have a OOM error, please refer to lab-11-X-mnist_deep_cnn_low_memory.py
+
+correct_prediction = tf.equal(tf.argmax(logits, 1), tf.argmax(Y_one_hot, 1))
+accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+print('Accuracy:', sess.run(accuracy, feed_dict={
+      X: X_test, Y: Y_test, keep_prob: 1}))
+
+# Get one and predict
+r = random.randint(0, num_test - 1)
+print("Label: ", Y_test[r:r + 1])
+print("Prediction: ", sess.run(
+    tf.argmax(logits, 1), feed_dict={X: X_test[r:r + 1], keep_prob: 1}))
